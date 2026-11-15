@@ -234,7 +234,6 @@ WHERE f.date_local BETWEEN date(last.last_date, '-20 days') AND last.last_date;
 -- Seed: 8 locations (all default to Open-Meteo for forecasts; no measured source yet).
 --   Coordinates: ids 1-3 are the demo's points; ids 4-8 from the Open-Meteo geocoding API.
 --   ground_elevation_m: Open-Meteo geocoding API for all 8
---   (GeoNames ids 3027301, 3178483, 2660191, 2996205, 3017116, 2657918, 2661713, 3028016).
 -- ---------------------------------------------------------------------------
 INSERT INTO locations (location_id, name, country, latitude, longitude, ground_elevation_m) VALUES
     (1, 'Chamonix',      'FR', 45.9237,  6.8694,  1060),
