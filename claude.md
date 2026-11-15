@@ -6,4 +6,4 @@ The main and default source for historical forecast is open meteo historical for
 
 Measured values will be added later.
 
-This project contains only the backend, a copy of the v_series_summary_21d view should be pusehd to another repo containing the frontend.
+This project contains only the backend, a CSV copy of the v_series_daily_21d view is pushed to another repo containing the frontend.

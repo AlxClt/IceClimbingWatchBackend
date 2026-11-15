@@ -25,8 +25,8 @@ An hourly/daily 429 or a 4xx error stops the run. Each group of series is
 written in one transaction once all its requests have succeeded, so a failed run
 writes nothing and the next run catches up from the same point.
 
-After the update, the views v_series_daily_21d and v_series_summary_21d are exported
-to CSV files (one file per view, named after the view) in data/exports/.
+After the update, the view v_series_daily_21d is exported to a CSV file
+(named after the view) in data/exports/.
 
 Usage:  python scripts/update_ice_weather_db.py [--db PATH] [--days 21]
                 [--export-dir DIR] [--export-only | --no-export]
@@ -56,7 +56,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = ROOT / "data" / "ice_weather.db"
 SCHEMA = ROOT / "data" / "create_ice_weather_db.sql"
 DEFAULT_EXPORT_DIR = ROOT / "data" / "exports"
-EXPORT_VIEWS = ("v_series_daily_21d", "v_series_summary_21d")
+EXPORT_VIEWS = ("v_series_daily_21d",)
 
 OPEN_METEO_SOURCE_ID = 1
 FEATURE_VERSION = 1
@@ -559,9 +559,11 @@ def run(db_path: Path, days: int) -> None:
         print(f"  {runs}: {n_hourly} hourly rows upserted, {n_daily} daily rows computed")
 
     summary = conn.execute(
-        "SELECT COUNT(*), MIN(n_days), MAX(n_days), MAX(last_date) FROM v_series_summary_21d"
+        "SELECT COUNT(*), MIN(n_days), MAX(n_days), MAX(last_date) FROM ("
+        "SELECT COUNT(*) AS n_days, MAX(date_local) AS last_date "
+        "FROM v_series_daily_21d GROUP BY series_id)"
     ).fetchone()
-    print(f"v_series_summary_21d: {summary[0]} series, n_days {summary[1]}-{summary[2]}, "
+    print(f"v_series_daily_21d: {summary[0]} series, n_days {summary[1]}-{summary[2]}, "
           f"last date {summary[3]}")
     conn.close()
 
