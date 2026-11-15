@@ -16,7 +16,7 @@ permissions:
 env:
   FRONTEND_REPO: AlxClt/IceClimbingWatch
   FRONTEND_BRANCH: main
-  EXPORT_FILES: v_series_daily_21d.csv v_series_summary_21d.csv
+  EXPORT_FILES: v_series_daily_21d.csv
 
 jobs:
   update:
