@@ -598,7 +598,7 @@ def export_views(db_path: Path, out_dir: Path, views=EXPORT_VIEWS) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p = argparse.ArgumentParser()
     p.add_argument("--db", type=Path, default=DEFAULT_DB, help=f"SQLite file (default: {DEFAULT_DB})")
     p.add_argument("--days", type=int, default=21, help="backfill length for empty series (default: 21)")
     p.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR,
