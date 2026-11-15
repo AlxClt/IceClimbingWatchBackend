@@ -1,0 +1,74 @@
+name: Update ice weather DB
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # every day at 02:00 UTC (GMT)
+  workflow_dispatch: 
+
+# No parallel runs
+concurrency:
+  group: update-ice-weather-db
+  cancel-in-progress: false
+
+permissions:
+  contents: write 
+
+env:
+  FRONTEND_REPO: AlxClt/IceClimbingWatch
+  FRONTEND_BRANCH: main
+  EXPORT_FILES: v_series_daily_21d.csv v_series_summary_21d.csv
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    # The client-side rate limiter may pause for a while on large backfills.
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out backend repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Update database and export CSVs
+        run: python scripts/update_ice_weather_db.py
+
+      - name: Commit database and exports to backend repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/ice_weather.db data/exports/
+          if git diff --cached --quiet; then
+            echo "No data changes to commit."
+          else
+            git commit -m "Update ice weather data $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+
+      - name: Check out frontend repo
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.FRONTEND_REPO }}
+          ref: ${{ env.FRONTEND_BRANCH }}
+          token: ${{ secrets.FRONTEND_REPO_TOKEN }}
+          path: frontend
+
+      - name: Push CSV exports to frontend repo
+        working-directory: frontend
+        run: |
+          mkdir -p data
+          for f in $EXPORT_FILES; do
+            cp "../data/exports/$f" "data/$f"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "Frontend CSVs already up to date."
+          else
+            git commit -m "Update ice weather CSV exports $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push origin HEAD:$FRONTEND_BRANCH
+          fi
