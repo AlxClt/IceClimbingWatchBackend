@@ -11,12 +11,16 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write   # to overwrite the data release assets (no commits are pushed)
 
 env:
   FRONTEND_REPO: AlxClt/IceClimbingWatch
   FRONTEND_BRANCH: main
   EXPORT_FILES: v_series_daily_21d.csv
+  # The DB lives outside git, as an asset of this release, overwritten on every run.
+  DATA_RELEASE: data
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   update:
@@ -33,10 +37,36 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The database and CSVs are not tracked in git: the DB is rebuilt on every run
-      # (21 days of history backfilled) and only the CSVs are pushed to the frontend repo.
+      # The database and CSVs are not tracked in git. The DB is kept as an asset of the
+      # "data" release: downloaded here, updated incrementally, then re-uploaded (overwritten).
+      # Without a release / asset yet, the script creates a fresh DB (21-day backfill).
+      # Any other download error fails the run, so a fresh DB never overwrites the stored one.
+      - name: Download database from the data release
+        run: |
+          mkdir -p data
+          if assets=$(gh release view "$DATA_RELEASE" --json assets -q '.assets[].name' 2>gh_err.txt); then
+            if grep -qx ice_weather.db <<<"$assets"; then
+              gh release download "$DATA_RELEASE" -p ice_weather.db -D data --clobber
+              echo "Downloaded data/ice_weather.db ($(stat -c %s data/ice_weather.db) bytes)"
+            else
+              echo "Release $DATA_RELEASE has no ice_weather.db yet; a new database will be created."
+            fi
+          elif grep -qi "release not found" gh_err.txt; then
+            echo "Release $DATA_RELEASE does not exist yet; a new database will be created."
+          else
+            cat gh_err.txt
+            exit 1
+          fi
+
       - name: Update database and export CSVs
         run: python scripts/update_ice_weather_db.py
+
+      - name: Upload database and CSVs to the data release
+        run: |
+          if ! gh release view "$DATA_RELEASE" >/dev/null 2>&1; then
+            gh release create "$DATA_RELEASE" --latest=false --title "Ice weather data"               --notes "Latest ice_weather.db and CSV exports, overwritten by the daily workflow. Not versioned."
+          fi
+          gh release upload "$DATA_RELEASE" data/ice_weather.db data/exports/*.csv --clobber
 
       - name: Check out frontend repo
         uses: actions/checkout@v5
