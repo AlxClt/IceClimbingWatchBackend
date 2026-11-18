@@ -10,6 +10,8 @@ A forecast series that has no data yet (e.g. a location added after the last run
 is backfilled like an empty database.
 
 Data flow: Open-Meteo Historical Forecast API -> raw_hourly -> daily_features.
+Then the next 7 days: Open-Meteo live forecast API -> forecast_hourly -> forecast_daily, replaced
+at every run (only the latest forecast is kept). A failed forecast request only prints a warning.
 
 Hours up to the current hour are stored. 
 daily_features rows are written only for local days whose windows are fully covered by hourly data, so the
@@ -25,7 +27,7 @@ An hourly/daily 429 or a 4xx error stops the run. Each group of series is
 written in one transaction once all its requests have succeeded, so a failed run
 writes nothing and the next run catches up from the same point.
 
-After the update, the view v_series_daily_21d is exported to a CSV file
+After the update, the view v_series_daily_21d (history + forecast days, flag is_prediction) is exported to a CSV file
 (named after the view) in data/exports/.
 
 Usage:  python scripts/update_ice_weather_db.py [--db PATH] [--days 21]
@@ -59,6 +61,8 @@ DEFAULT_EXPORT_DIR = ROOT / "data" / "exports"
 EXPORT_VIEWS = ("v_series_daily_21d",)
 
 OPEN_METEO_SOURCE_ID = 1
+OPEN_METEO_LIVE_SOURCE_ID = 2   # live forecast API: next-days predictions
+FORECAST_DAYS = 7               # local days stored in forecast_daily, starting today
 FEATURE_VERSION = 1
 HTTP_TIMEOUT_S = 120
 
@@ -360,13 +364,13 @@ def lookup_missing_points(api_url: str, series, responses) -> list[tuple]:
     return out
 
 
-def store_hourly(conn, run_id: int, series, responses, cutoff: datetime) -> int:
-    """Upsert hourly rows up to `cutoff` (inclusive). Rows with no value at all are skipped."""
+def store_hourly(conn, run_id: int, series, responses, cutoff: datetime, table: str = "raw_hourly") -> int:
+    """Upsert hourly rows into `table` up to `cutoff` (inclusive). Rows with no value at all are skipped."""
     cols = ", ".join(RAW_COLUMNS)
     placeholders = ", ".join("?" for _ in range(len(RAW_COLUMNS) + 3))
     updates = ", ".join(f"{c} = excluded.{c}" for c in ["run_id"] + RAW_COLUMNS)
     sql = (
-        f"INSERT INTO raw_hourly (series_id, time_utc, run_id, {cols}) VALUES ({placeholders}) "
+        f"INSERT INTO {table} (series_id, time_utc, run_id, {cols}) VALUES ({placeholders}) "
         f"ON CONFLICT (series_id, time_utc) DO UPDATE SET {updates}"
     )
     measured_cols = [c for c in RAW_COLUMNS if c != "is_day"]
@@ -404,11 +408,12 @@ def _sum(values):
     return sum(vals) if vals else None
 
 
-def compute_daily_features(conn, series, first_day: date, last_day: date, computed_at: str) -> int:
-    """Recompute daily_features for each series and local day in [first_day, last_day].
-    Days whose windows are not fully covered by hourly rows are skipped."""
-    sql = """
-        INSERT OR REPLACE INTO daily_features (
+def compute_daily_features(conn, series, first_day: date, last_day: date, computed_at: str,
+                           hourly_table: str = "raw_hourly", daily_table: str = "daily_features") -> int:
+    """Recompute `daily_table` from `hourly_table` for each series and local day in
+    [first_day, last_day]. Days whose windows are not fully covered by hourly rows are skipped."""
+    sql = f"""
+        INSERT OR REPLACE INTO {daily_table} (
             series_id, date_local, n_hours,
             t_min_c, t_max_c, hours_above_0c, hours_air_le_0c,
             precip_mm, rain_mm, snow_we_mm,
@@ -425,7 +430,7 @@ def compute_daily_features(conn, series, first_day: date, last_day: date, comput
         hourly = {
             r["time_utc"]: r
             for r in conn.execute(
-                "SELECT * FROM raw_hourly WHERE series_id = ? AND time_utc BETWEEN ? AND ?",
+                f"SELECT * FROM {hourly_table} WHERE series_id = ? AND time_utc BETWEEN ? AND ?",
                 (s["series_id"], lo, hi),
             )
         }
@@ -561,11 +566,82 @@ def run(db_path: Path, days: int) -> None:
     summary = conn.execute(
         "SELECT COUNT(*), MIN(n_days), MAX(n_days), MAX(last_date) FROM ("
         "SELECT COUNT(*) AS n_days, MAX(date_local) AS last_date "
-        "FROM v_series_daily_21d GROUP BY series_id)"
+        "FROM v_series_daily_21d WHERE is_prediction = 0 GROUP BY series_id)"
     ).fetchone()
     print(f"v_series_daily_21d: {summary[0]} series, n_days {summary[1]}-{summary[2]}, "
           f"last date {summary[3]}")
     conn.close()
+
+
+def run_forecast(db_path: Path) -> None:
+    """Replace the stored next-days forecast (forecast_hourly / forecast_daily) of every
+    Open-Meteo forecast series with the latest one from the live forecast API."""
+    conn = open_db(db_path)
+    try:
+        now = utc_now()
+        today = now.date()
+        fetched_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        row = conn.execute(
+            "SELECT api_url FROM sources WHERE source_id = ?", (OPEN_METEO_LIVE_SOURCE_ID,)
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"source {OPEN_METEO_LIVE_SOURCE_ID} (live forecast API) missing from the database"
+            )
+        api_url = row[0]
+
+        series = conn.execute(
+            """
+            SELECT s.series_id, s.location_id, s.elevation_m, s.model,
+                   l.latitude, l.longitude, l.timezone
+            FROM series AS s
+            JOIN locations AS l USING (location_id)
+            WHERE s.type = 'forecast' AND s.source_id = ?
+            ORDER BY s.series_id
+            """,
+            (OPEN_METEO_SOURCE_ID,),
+        ).fetchall()
+        if not series:
+            print("No forecast series defined; no forecast to fetch.")
+            return
+
+        # Local days today .. today+6 need hours from local 00:00 of `today` (up to 2 h before
+        # 00:00 UTC) to 12:00 of the day after the last one (night window).
+        start = today - timedelta(days=1)
+        end = today + timedelta(days=FORECAST_DAYS)
+        chunks = plan_chunks(series, start, end)
+        print(f"Fetching the {FORECAST_DAYS}-day forecast of {len(series)} series "
+              f"in {len(chunks)} request(s) ...")
+
+        # Network only: every request must succeed before the previous forecast is replaced.
+        fetched = []
+        for subset, chunk_start, chunk_end in chunks:
+            url, params, responses = fetch_forecast(api_url, subset, chunk_start, chunk_end)
+            fetched.append((subset, chunk_start, chunk_end, url, params, responses))
+
+        far_future = now + timedelta(days=366)
+        with conn:
+            ids = [(s["series_id"],) for s in series]
+            conn.executemany("DELETE FROM forecast_daily WHERE series_id = ?", ids)
+            conn.executemany("DELETE FROM forecast_hourly WHERE series_id = ?", ids)
+            n_hourly = 0
+            for subset, chunk_start, chunk_end, url, params, responses in fetched:
+                run_id = conn.execute(
+                    "INSERT INTO fetch_runs (source_id, fetched_at_utc, endpoint, start_date, "
+                    "end_date, request_params) VALUES (?, ?, ?, ?, ?, ?)",
+                    (OPEN_METEO_LIVE_SOURCE_ID, fetched_at, url, chunk_start.isoformat(),
+                     chunk_end.isoformat(), json.dumps(params)),
+                ).lastrowid
+                n_hourly += store_hourly(conn, run_id, subset, responses, far_future,
+                                         table="forecast_hourly")
+            n_daily = compute_daily_features(
+                conn, series, today, today + timedelta(days=FORECAST_DAYS - 1), fetched_at,
+                hourly_table="forecast_hourly", daily_table="forecast_daily",
+            )
+        print(f"  forecast: {n_hourly} hourly rows and {n_daily} daily rows stored")
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -612,6 +688,10 @@ def main() -> None:
     try:
         if not args.export_only:
             run(args.db, args.days)
+            try:
+                run_forecast(args.db)
+            except Exception as e:  # noqa: BLE001 - history is already stored: keep the previous forecast
+                print(f"WARNING: forecast not updated, previous forecast kept: {e}", file=sys.stderr)
         if not args.no_export:
             export_views(args.db, args.export_dir)
     except Exception as e:  # noqa: BLE001 - report and exit non-zero

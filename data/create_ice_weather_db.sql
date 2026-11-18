@@ -15,7 +15,10 @@ CREATE TABLE sources (
     UNIQUE (source_id, type)
 );
 INSERT INTO sources (source_id, name, type, api_url) VALUES
-    (1, 'Open-Meteo', 'forecast', 'https://historical-forecast-api.open-meteo.com/v1/forecast');
+    (1, 'Open-Meteo', 'forecast', 'https://historical-forecast-api.open-meteo.com/v1/forecast'),
+    -- Live forecast API: source of the next-7-days predictions (forecast_hourly / forecast_daily).
+    -- Not referenced by series or locations: predictions reuse the series of source 1.
+    (2, 'Open-Meteo live forecast', 'forecast', 'https://api.open-meteo.com/v1/forecast');
 
 -- ---------------------------------------------------------------------------
 -- 1. LOCATIONS — one row per climbing area (not per altitude).
@@ -174,10 +177,61 @@ CREATE TABLE daily_features (
 ) WITHOUT ROWID;
 
 -- ---------------------------------------------------------------------------
--- 6. V_SERIES_DAILY_21D — daily rows over the last 21 local days available for each series:
---    dates in [date(last_date, '-20 days'), last_date], last_date = MAX(date_local),
---    denormalised with location, source and series metadata: one flat table for CSV export
---    and for the dashboard template (charts + map).
+-- 5b. FORECAST_HOURLY / FORECAST_DAILY — next-days predictions (Open-Meteo live forecast API,
+--     source 2) for the existing forecast series. Same columns, units, time convention and daily
+--     definitions as raw_hourly / daily_features. Only the latest forecast is kept: every update
+--     replaces all rows of the series it fetched. fetch_runs.source_id = 2 for their run_id.
+-- ---------------------------------------------------------------------------
+CREATE TABLE forecast_hourly (
+    series_id                  INTEGER NOT NULL REFERENCES series(series_id),
+    time_utc                   TEXT    NOT NULL,    -- 'YYYY-MM-DDTHH:00Z'
+    run_id                     INTEGER NOT NULL REFERENCES fetch_runs(run_id),
+    temperature_2m_c           REAL,
+    precipitation_mm           REAL,
+    rain_mm                    REAL,
+    showers_mm                 REAL,
+    snowfall_cm                REAL,
+    freezing_level_height_m    REAL,
+    cloud_cover_pct            INTEGER,
+    is_day                     INTEGER CHECK (is_day IN (0, 1)),
+    PRIMARY KEY (series_id, time_utc)
+) WITHOUT ROWID;
+
+CREATE TABLE forecast_daily (
+    series_id            INTEGER NOT NULL REFERENCES series(series_id),
+    date_local           TEXT    NOT NULL,
+    n_hours              INTEGER NOT NULL,
+    t_min_c              REAL,
+    t_max_c              REAL,
+    hours_above_0c       INTEGER,
+    hours_air_le_0c      INTEGER,
+    precip_mm            REAL,
+    rain_mm              REAL,
+    snow_we_mm           REAL,
+    snow_pct             REAL GENERATED ALWAYS AS
+                           (CASE WHEN precip_mm > 0 THEN 100.0 * snow_we_mm / precip_mm END) VIRTUAL,
+    fl_min_m             REAL,
+    fl_mean_m            REAL,
+    fl_max_m             REAL,
+    hours_fl_below_alt   INTEGER,
+    night_hours          INTEGER,
+    night_clear_h        INTEGER,
+    night_partial_h      INTEGER,
+    night_cloudy_h       INTEGER,
+    night_cloud_mean_pct REAL,
+    computed_at_utc      TEXT    NOT NULL,
+    feature_version      INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (series_id, date_local),
+    CHECK (night_clear_h + night_partial_h + night_cloudy_h = night_hours)
+) WITHOUT ROWID;
+
+-- ---------------------------------------------------------------------------
+-- 6. V_SERIES_DAILY_21D — daily rows, denormalised with location, source and series metadata:
+--    one flat table for CSV export and for the dashboard template (charts + map).
+--    is_prediction = 0: the last 21 local days available for each series in daily_features,
+--      dates in [date(last_date, '-20 days'), last_date], last_date = MAX(date_local).
+--    is_prediction = 1: the latest forecast days (forecast_daily) after that last_date, so a
+--      date never appears twice for a series. Nothing for a series without history yet.
 -- ---------------------------------------------------------------------------
 CREATE VIEW v_series_daily_21d AS
 WITH last AS (
@@ -222,13 +276,60 @@ SELECT
     f.night_partial_h,
     f.night_cloudy_h,
     f.night_cloud_mean_pct,
-    f.feature_version
+    f.feature_version,
+    0                      AS is_prediction
 FROM daily_features AS f
 JOIN last              USING (series_id)
 JOIN series   AS s     USING (series_id)
 JOIN locations AS l    USING (location_id)
 JOIN sources  AS src   ON src.source_id = s.source_id
-WHERE f.date_local BETWEEN date(last.last_date, '-20 days') AND last.last_date;
+WHERE f.date_local BETWEEN date(last.last_date, '-20 days') AND last.last_date
+UNION ALL
+SELECT
+    s.series_id,
+    s.location_id,
+    l.name                 AS location_name,
+    l.country,
+    l.latitude,
+    l.longitude,
+    l.ground_elevation_m,
+    l.timezone,
+    s.type,
+    s.source_id,
+    src.name               AS source_name,
+    s.source_point_id,
+    s.model,
+    s.elevation_m,
+    s.point_latitude,
+    s.point_longitude,
+    s.point_elevation_m,
+    f.date_local,
+    f.n_hours,
+    f.t_min_c,
+    f.t_max_c,
+    f.hours_above_0c,
+    f.hours_air_le_0c,
+    f.precip_mm,
+    f.rain_mm,
+    f.snow_we_mm,
+    f.snow_pct,
+    f.fl_min_m,
+    f.fl_mean_m,
+    f.fl_max_m,
+    f.hours_fl_below_alt,
+    f.night_hours,
+    f.night_clear_h,
+    f.night_partial_h,
+    f.night_cloudy_h,
+    f.night_cloud_mean_pct,
+    f.feature_version,
+    1                      AS is_prediction
+FROM forecast_daily AS f
+JOIN last              USING (series_id)
+JOIN series   AS s     USING (series_id)
+JOIN locations AS l    USING (location_id)
+JOIN sources  AS src   ON src.source_id = s.source_id
+WHERE f.date_local > last.last_date;
 
 -- ---------------------------------------------------------------------------
 -- Seed: 8 locations (all default to Open-Meteo for forecasts; no measured source yet).
