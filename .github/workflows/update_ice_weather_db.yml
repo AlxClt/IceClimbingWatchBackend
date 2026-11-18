@@ -15,7 +15,6 @@ permissions:
 
 env:
   FRONTEND_REPO: AlxClt/IceClimbingWatch
-  FRONTEND_BRANCH: main
   EXPORT_FILES: v_series_daily_21d.csv
   # The DB lives outside git, as an asset of this release, overwritten on every run.
   DATA_RELEASE: data
@@ -64,28 +63,23 @@ jobs:
       - name: Upload database and CSVs to the data release
         run: |
           if ! gh release view "$DATA_RELEASE" >/dev/null 2>&1; then
-            gh release create "$DATA_RELEASE" --latest=false --title "Ice weather data"               --notes "Latest ice_weather.db and CSV exports, overwritten by the daily workflow. Not versioned."
+            gh release create "$DATA_RELEASE" --latest=false --title "Ice weather data" \
+              --notes "Latest ice_weather.db and CSV exports, overwritten by the daily workflow. Not versioned."
           fi
           gh release upload "$DATA_RELEASE" data/ice_weather.db data/exports/*.csv --clobber
 
-      - name: Check out frontend repo
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ env.FRONTEND_REPO }}
-          ref: ${{ env.FRONTEND_BRANCH }}
-          token: ${{ secrets.FRONTEND_REPO_TOKEN }}
-          path: frontend
-
-      - name: Push CSV exports to frontend repo
-        working-directory: frontend
+      # The frontend does not track the CSVs: they are assets of its "data" release, overwritten
+      # on every run (changed or not). The dispatch triggers its Pages deploy, which downloads them.
+      - name: Publish CSVs to the frontend release
+        env:
+          GH_TOKEN: ${{ secrets.FRONTEND_REPO_TOKEN }}
         run: |
-          mkdir -p data
-          for f in $EXPORT_FILES; do
-            cp "../data/exports/$f" "data/$f"
-          done
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
-          # Always commit and push, even when the CSVs are unchanged (empty commit).
-          git commit --allow-empty -m "Update ice weather CSV exports $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git push origin HEAD:$FRONTEND_BRANCH
+          if ! gh release view "$DATA_RELEASE" -R "$FRONTEND_REPO" >/dev/null 2>&1; then
+            gh release create "$DATA_RELEASE" -R "$FRONTEND_REPO" --latest=false --title "Ice weather data" \
+              --notes "Latest weather CSV exports, overwritten by the backend daily workflow. Not versioned."
+          fi
+          files=()
+          for f in $EXPORT_FILES; do files+=("data/exports/$f"); done
+          gh release upload "$DATA_RELEASE" -R "$FRONTEND_REPO" "${files[@]}" --clobber
+          gh api -X POST "repos/$FRONTEND_REPO/dispatches" -f event_type=data-updated
+          echo "Published ${files[*]} to $FRONTEND_REPO release $DATA_RELEASE and triggered its Pages deploy."

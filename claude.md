@@ -16,4 +16,4 @@ After the historical update, `scripts/update_ice_weather_db.py` fetches the next
 
 # Data storage
 
-`data/ice_weather.db` and `data/exports/` are not tracked in git. The daily workflow downloads the DB from the `data` GitHub release, updates it, and overwrites the release assets (`ice_weather.db` and the CSV exports): https://github.com/AlxClt/IceClimbingWatchBackend/releases/tag/data. The CSV is also pushed to the frontend repo on every run.
+`data/ice_weather.db` and `data/exports/` are not tracked in git. The daily workflow downloads the DB from the `data` GitHub release, updates it, and overwrites the release assets (`ice_weather.db` and the CSV exports): https://github.com/AlxClt/IceClimbingWatchBackend/releases/tag/data. On every run, the CSV is also uploaded (overwritten) as an asset of the `data` release of the frontend repo (AlxClt/IceClimbingWatch), then a `data-updated` repository_dispatch triggers the frontend "Deploy Pages" workflow, which downloads it into `data/` and deploys the GitHub Pages site.
