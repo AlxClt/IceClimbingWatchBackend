@@ -332,9 +332,9 @@ JOIN sources  AS src   ON src.source_id = s.source_id
 WHERE f.date_local > last.last_date;
 
 -- ---------------------------------------------------------------------------
--- Seed: 8 locations (all default to Open-Meteo for forecasts; no measured source yet).
+-- Seed: 10 locations (all default to Open-Meteo for forecasts; no measured source yet).
 --   Coordinates: ids 1-3 are the demo's points; ids 4-8 from the Open-Meteo geocoding API.
---   ground_elevation_m: Open-Meteo geocoding API for all 8
+--   ground_elevation_m: Open-Meteo geocoding API for ids 1-8
 -- ---------------------------------------------------------------------------
 INSERT INTO locations (location_id, name, country, latitude, longitude, ground_elevation_m) VALUES
     (1, 'Chamonix',      'FR', 45.9237,  6.8694,  1060),
@@ -344,7 +344,9 @@ INSERT INTO locations (location_id, name, country, latitude, longitude, ground_e
     (5, 'Freissinières', 'FR', 44.75386, 6.53727, 1216),
     (6, 'Zinal',         'CH', 46.13426, 7.62868, 1640),
     (7, 'Arolla',        'CH', 46.0254,  7.48358, 1953),
-    (8, 'Ceillac',       'FR', 44.66804, 6.77891, 1658);
+    (8, 'Ceillac',       'FR', 44.66804, 6.77891, 1658),
+    (9, 'La Grave',      'FR', 45.045574, 6.30621, 1493),
+    (10, 'Sertig',       'CH', 46.726836, 9.848731, 1861);
 
 -- Forecast series from the altitude rule. Rerun after adding a location or a default altitude
 -- (INSERT OR IGNORE + ux_series_identity skip existing series).

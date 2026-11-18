@@ -221,3 +221,7 @@ __marimo__/
 
 # Docs 
 ice_weather_sqlite_erd.html
+
+# Generated data (rebuilt by scripts/update_ice_weather_db.py)
+data/ice_weather.db
+data/exports/

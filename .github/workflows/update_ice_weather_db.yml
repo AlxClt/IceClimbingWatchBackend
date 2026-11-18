@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write 
+  contents: read
 
 env:
   FRONTEND_REPO: AlxClt/IceClimbingWatch
@@ -33,20 +33,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The database and CSVs are not tracked in git: the DB is rebuilt on every run
+      # (21 days of history backfilled) and only the CSVs are pushed to the frontend repo.
       - name: Update database and export CSVs
         run: python scripts/update_ice_weather_db.py
-
-      - name: Commit database and exports to backend repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/ice_weather.db data/exports/
-          if git diff --cached --quiet; then
-            echo "No data changes to commit."
-          else
-            git commit -m "Update ice weather data $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push origin HEAD:${{ github.ref_name }}
-          fi
 
       - name: Check out frontend repo
         uses: actions/checkout@v5
@@ -66,9 +56,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
-          if git diff --cached --quiet; then
-            echo "Frontend CSVs already up to date."
-          else
-            git commit -m "Update ice weather CSV exports $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push origin HEAD:$FRONTEND_BRANCH
-          fi
+          # Always commit and push, even when the CSVs are unchanged (empty commit).
+          git commit --allow-empty -m "Update ice weather CSV exports $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push origin HEAD:$FRONTEND_BRANCH
