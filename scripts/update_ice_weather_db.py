@@ -63,7 +63,7 @@ EXPORT_VIEWS = ("v_series_daily_21d",)
 OPEN_METEO_SOURCE_ID = 1
 OPEN_METEO_LIVE_SOURCE_ID = 2   # live forecast API: next-days predictions
 FORECAST_DAYS = 7               # local days stored in forecast_daily, starting today
-FEATURE_VERSION = 1
+FEATURE_VERSION = 2             # 2: night window = the night BEFORE the day (was the night after)
 HTTP_TIMEOUT_S = 120
 
 # Open-Meteo rate limiting (free tier: 600/min, 5 000/h, 10 000/day weighted calls per IP)
@@ -158,10 +158,9 @@ def plan_fetches(conn: sqlite3.Connection, days: int, today: date) -> dict[date,
         "SELECT MAX(end_date) FROM fetch_runs WHERE source_id = ?", (OPEN_METEO_SOURCE_ID,)
     ).fetchone()[0]
 
-    # Backfill start: `days` complete local days ending yesterday, plus one spare day so
-    # that `days` complete days exist even when yesterday's night window is not over yet,
-    # plus one day of margin for the UTC/local offset.
-    backfill_start = today - timedelta(days=days + 2)
+    # Backfill start: `days` complete local days ending yesterday, plus one day for the
+    # night before the first of them (from 12:00 local the day before).
+    backfill_start = today - timedelta(days=days + 1)
 
     rows = conn.execute(
         """
@@ -425,8 +424,8 @@ def compute_daily_features(conn, series, first_day: date, last_day: date, comput
     written = 0
     for s in series:
         tz = ZoneInfo(s["timezone"])
-        lo = iso_utc(local_to_utc(first_day, 0, tz))
-        hi = iso_utc(local_to_utc(last_day + timedelta(days=1), 12, tz))
+        lo = iso_utc(local_to_utc(first_day - timedelta(days=1), 12, tz))
+        hi = iso_utc(local_to_utc(last_day + timedelta(days=1), 0, tz))  # BETWEEN: inclusive
         hourly = {
             r["time_utc"]: r
             for r in conn.execute(
@@ -439,11 +438,13 @@ def compute_daily_features(conn, series, first_day: date, last_day: date, comput
         while d <= last_day:
             day_start = local_to_utc(d, 0, tz)
             next_start = local_to_utc(d + timedelta(days=1), 0, tz)
-            night_start = local_to_utc(d, 12, tz)
-            night_end = local_to_utc(d + timedelta(days=1), 12, tz)
+            # The night before d: it is the one that sets the ice conditions of day d.
+            night_start = local_to_utc(d - timedelta(days=1), 12, tz)
+            night_end = local_to_utc(d, 12, tz)
 
-            # All windows lie within [day_start, night_end]; require every hour to be present.
-            if all(iso_utc(t) in hourly for t in hours_between(day_start, night_end)):
+            # All windows lie within [night_start, next_start] (accumulated values end one hour
+            # after next_start); require every hour to be present.
+            if all(iso_utc(t) in hourly for t in hours_between(night_start, next_start + HOUR)):
                 inst = [hourly[iso_utc(t)] for t in hours_between(day_start, next_start)]
                 acc = [hourly[iso_utc(t)] for t in hours_between(day_start + HOUR, next_start + HOUR)]
                 night = [
@@ -502,6 +503,35 @@ def _features(inst, acc, night, elevation_m):
     )
 
 
+def recompute_outdated_features(conn, computed_at: str) -> None:
+    """Recompute daily_features rows computed with an older FEATURE_VERSION from raw_hourly.
+    Outdated rows whose window is no longer fully covered by raw_hourly are deleted."""
+    outdated = conn.execute(
+        "SELECT series_id, MIN(date_local), MAX(date_local) FROM daily_features "
+        "WHERE feature_version < ? GROUP BY series_id",
+        (FEATURE_VERSION,),
+    ).fetchall()
+    if not outdated:
+        return
+    series = {
+        r["series_id"]: r
+        for r in conn.execute(
+            "SELECT s.series_id, s.elevation_m, l.timezone "
+            "FROM series AS s JOIN locations AS l USING (location_id)"
+        )
+    }
+    n_daily = 0
+    with conn:
+        conn.execute("DELETE FROM daily_features WHERE feature_version < ?", (FEATURE_VERSION,))
+        for series_id, first, last in outdated:
+            n_daily += compute_daily_features(
+                conn, [series[series_id]], date.fromisoformat(first), date.fromisoformat(last),
+                computed_at,
+            )
+    print(f"Recomputed {n_daily} daily rows of {len(outdated)} series "
+          f"to feature version {FEATURE_VERSION}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -515,6 +545,8 @@ def run(db_path: Path, days: int) -> None:
     api_url = conn.execute(
         "SELECT api_url FROM sources WHERE source_id = ?", (OPEN_METEO_SOURCE_ID,)
     ).fetchone()[0]
+
+    recompute_outdated_features(conn, fetched_at)
 
     plan = plan_fetches(conn, days, today)
     if not plan:
@@ -554,7 +586,8 @@ def run(db_path: Path, days: int) -> None:
                 ).lastrowid
                 run_ids.append(run_id)
                 n_hourly += store_hourly(conn, run_id, subset, responses, cutoff)
-            # The day before `start` too: its night window reaches into `start`.
+            # The day before `start` too: its window ends at local midnight, which can be
+            # after the last hour stored by the previous run.
             n_daily = compute_daily_features(
                 conn, series, start - timedelta(days=1), today, fetched_at
             )
@@ -606,8 +639,8 @@ def run_forecast(db_path: Path) -> None:
             print("No forecast series defined; no forecast to fetch.")
             return
 
-        # Local days today .. today+6 need hours from local 00:00 of `today` (up to 2 h before
-        # 00:00 UTC) to 12:00 of the day after the last one (night window).
+        # Local days today .. today+6 need hours from 12:00 local the day before `today` (night
+        # window) to local 00:00 after the last one (+1 h of accumulated values).
         start = today - timedelta(days=1)
         end = today + timedelta(days=FORECAST_DAYS)
         chunks = plan_chunks(series, start, end)

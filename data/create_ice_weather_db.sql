@@ -163,7 +163,8 @@ CREATE TABLE daily_features (
     fl_max_m             REAL,                      -- MAX(freezing_level_height_m)
     hours_fl_below_alt   INTEGER,                   -- COUNT(h : freezing_level_height_m < series.elevation_m); NULL if no freezing level
 
-    -- Night sky, attributed to the EVENING date: window [d 12:00, d+1 12:00) local, hours with is_day = 0
+    -- Night sky, attributed to the MORNING date (the night before day d, which sets its ice conditions):
+    -- window [d-1 12:00, d 12:00) local, hours with is_day = 0
     night_hours          INTEGER,                   -- COUNT(night hours with non-NULL cloud_cover_pct)
     night_clear_h        INTEGER,                   -- COUNT(night h : cloud_cover_pct <= 25)       (<= 2 oktas)
     night_partial_h      INTEGER,                   -- COUNT(night h : 25 < cloud_cover_pct < 75)
