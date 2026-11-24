@@ -1,0 +1,113 @@
+name: Build & Push c2c_scraper image to Docker Hub
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Which image to build (use one of the matrix names, or 'all')"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - c2c_scraper
+      tag_latest:
+        description: "Also push the :latest tag (manual runs only)"
+        required: true
+        default: false
+        type: boolean
+    #push:
+    #  branches: ["main"]
+
+env:
+  IMAGE_NAMESPACE: iceclimbingwatch
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: c2c_scraper
+            context: c2c_scraper
+            dockerfile: c2c_scraper/Dockerfile
+
+    steps:
+      - name: Decide whether this matrix entry should run
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Default: don't run
+          RUN="false"
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            RUN="true"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ github.event.inputs.image }}" = "all" ] || [ "${{ github.event.inputs.image }}" = "${{ matrix.name }}" ]; then
+              RUN="true"
+            fi
+          fi
+
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.select.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        if: steps.select.outputs.run == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.select.outputs.run == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute image name
+        if: steps.select.outputs.run == 'true'
+        id: img
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "image=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine whether to tag :latest
+        if: steps.select.outputs.run == 'true'
+        id: latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_name }}" = "main" ]; then
+            echo "enable_latest=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.tag_latest }}" = "true" ]; then
+            echo "enable_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enable_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Docker metadata (tags/labels)
+        if: steps.select.outputs.run == 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.image }}
+          tags: |
+            type=raw,value=sha-${{ github.sha }}
+            type=raw,value=latest,enable=${{ steps.latest.outputs.enable_latest }}
+
+      - name: Build and push (${{ matrix.name }})
+        if: steps.select.outputs.run == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

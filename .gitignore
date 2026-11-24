@@ -219,9 +219,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Docs 
-ice_weather_sqlite_erd.html
+# Generated data (rebuilt by weather/scripts/update_ice_weather_db.py)
+weather/data/ice_weather.db
+weather/data/exports/
 
-# Generated data (rebuilt by scripts/update_ice_weather_db.py)
-data/ice_weather.db
-data/exports/
+next_steps.txt
+
+# Runtime env files with secrets (camptocamp scraper); keep the templates
+.env.*
+!.env.example

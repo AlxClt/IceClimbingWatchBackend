@@ -1,0 +1,20 @@
+# Local development: builds the image from this folder.
+# Production runs the image published by .github/workflows/c2c_scraper_image.yml.
+services:
+  c2c_scraper_init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: c2c_scraper_init_container
+    env_file:
+      - .env.runtime
+    command: ["init"]      # create the schema + full route scrape
+
+  c2c_scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: c2c_scraper_container
+    env_file:
+      - .env.runtime
+    command: ["update"]    # incremental outings scrape
