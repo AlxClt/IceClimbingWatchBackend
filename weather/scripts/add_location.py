@@ -1,6 +1,6 @@
 """Script for adding a new location to the database. Optionally triggers the data update, otherwise it will be picked up in next run
 
-Example: python scripts/add_location.py --name="La Grave" --country=FR --lat=45.045574 --lon=6.30621 --ground_elevation_m=1493 
+Example: python weather/scripts/add_location.py --name="La Grave" --country=FR --lat=45.045574 --lon=6.30621 --ground_elevation_m=1493 
 """
 import sys
 import argparse

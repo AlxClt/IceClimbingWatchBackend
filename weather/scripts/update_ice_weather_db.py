@@ -2,7 +2,7 @@
 
 Behaviour
 ---------
-Database missing: create it using data/create_ice_weather_db.sql and backfills the last N days (default 21).
+Database missing: create it using weather/data/create_ice_weather_db.sql and backfills the last N days (default 21).
 Database present but empty: backfill the last N days.
 Database present with data: fetch the missing period from the last run date
 
@@ -28,9 +28,9 @@ written in one transaction once all its requests have succeeded, so a failed run
 writes nothing and the next run catches up from the same point.
 
 After the update, the view v_series_daily_21d (history + forecast days, flag is_prediction) is exported to a CSV file
-(named after the view) in data/exports/.
+(named after the view) in weather/data/exports/.
 
-Usage:  python scripts/update_ice_weather_db.py [--db PATH] [--days 21]
+Usage:  python weather/scripts/update_ice_weather_db.py [--db PATH] [--days 21]
                 [--export-dir DIR] [--export-only | --no-export]
 """
 

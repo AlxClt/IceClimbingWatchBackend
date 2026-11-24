@@ -26,6 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     # The client-side rate limiter may pause for a while on large backfills.
     timeout-minutes: 120
+    # The weather pipeline lives in weather/: every run step uses paths relative to it.
+    defaults:
+      run:
+        working-directory: weather
 
     steps:
       - name: Check out backend repo
