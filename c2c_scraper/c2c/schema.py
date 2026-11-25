@@ -1,11 +1,27 @@
 """SQLAlchemy schema of the camptocamp data: routes, outings, countries, orientations."""
+import datetime
 from typing import List
-from sqlalchemy import ForeignKey, Table, Column, Integer, String
+from sqlalchemy import ForeignKey, Table, Column, Integer, String, Date
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
+
+# Schema changes must come with an Alembic migration in c2c/migrations/versions/
+# (applied at startup by c2c.db.migrate_db).
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class IsoDate(TypeDecorator):
+    """DATE column that also accepts 'YYYY-MM-DD' strings, as returned by the camptocamp API."""
+    impl = Date
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if isinstance(value, str):
+            return datetime.date.fromisoformat(value)
+        return value
 
 # -----------------------
 # Routes data
@@ -29,8 +45,8 @@ class Routes(Base):
     global_rating=Column(String, nullable=True) 
     ice_rating=Column(String, nullable=True) 
     mixed_rating=Column(String, nullable=True) 
-    rock_free_rating=Column(String, nullable=True) 
-    last_updated=Column(String, nullable=True) 
+    rock_free_rating=Column(String, nullable=True)
+    last_updated=Column(IsoDate, nullable=True)
 
     orientations: Mapped[List["Orientations"]] = relationship(
         secondary="orientation_mapping", #For a many-to-many relationship, specifies the intermediary table, and is typically an instance of Table
@@ -76,7 +92,7 @@ class Countries(Base):
     __tablename__ = "countries"
 
     country_id=Column(Integer, primary_key=True)
-    countryName: Mapped[str] = mapped_column(nullable=True)
+    countryName: Mapped[str] = mapped_column(nullable=True, unique=True)
 
     def __repr__(self):
          return f"Country(id={self.country_id}, name={self.countryName})"
@@ -94,9 +110,9 @@ class Outings(Base):
     __tablename__ = "outings"
 
     outing_id: Mapped[int] = mapped_column(primary_key=True)
-    date: Mapped[str] 
-    conditions=Column(String, nullable=True) 
-    last_updated=Column(String, nullable=True) 
+    date: Mapped[datetime.date] = mapped_column(IsoDate)
+    conditions=Column(String, nullable=True)
+    last_updated=Column(IsoDate, nullable=True)
     
     routes: Mapped[List["Routes"]] = relationship(
         secondary="outings_mapping", back_populates='outings'

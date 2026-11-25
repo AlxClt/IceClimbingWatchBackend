@@ -1,29 +1,52 @@
 """Database helpers for the camptocamp scraper (routes, outings and their associations)."""
 import datetime
+import logging
 from functools import partial
+from pathlib import Path
 from typing import Optional, Set, List, Literal, Dict, Tuple
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, inspect, select, text
 
 from c2c.config import read_config
 from c2c.schema import (
-    Base,
     Routes,
     Orientations,
     Outings,
     Countries,
 )
 
+logger = logging.getLogger(__name__)
+
+ALEMBIC_INI = Path(__file__).resolve().parent.parent / "alembic.ini"
+# Revision matching the schema of databases created before Alembic (Base.metadata.create_all)
+PRE_ALEMBIC_REVISION = "0001"
+
 def get_engine(dbstring: str) -> Engine:
     engine = create_engine(dbstring)
     return engine
 
+def migrate_db(dbstring: str) -> None:
+    """Apply pending Alembic migrations (creates the schema on an empty database), in one transaction."""
+
+    cfg = Config(str(ALEMBIC_INI))
+    engine = create_engine(dbstring)
+
+    with engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        insp = inspect(conn)
+        if not insp.has_table("alembic_version") and insp.has_table("outings"):
+            logger.info("db.migrate.stamp_pre_alembic", extra={"revision": PRE_ALEMBIC_REVISION})
+            command.stamp(cfg, PRE_ALEMBIC_REVISION)
+        command.upgrade(cfg, "head")
+
 def create_db(dbstring) -> None:
+    """Fill the reference tables of a new database (the schema itself is created by migrate_db)."""
 
     engine = create_engine(dbstring)
-    Base.metadata.create_all(engine, checkfirst=True)
     populate_orientation_table(engine)
 
 def get_obj(Obj, idColumn: str, session: Session, objData: dict):
@@ -170,7 +193,7 @@ def load_scraped_routes_ids(engine: Engine, min_date: Optional[datetime.datetime
 
     route_ids: Set[int] = set()
     with engine.connect() as conn:
-        result = conn.execute(text(query), {"min_date": min_date.strftime("%Y-%m-%d")} if min_date else {})
+        result = conn.execute(text(query), {"min_date": min_date.date()} if min_date else {})
         route_ids = {row.route_id for row in result}
 
     return route_ids
@@ -190,18 +213,19 @@ def load_scraped_outings_ids(engine: Engine, min_date: Optional[datetime.datetim
 
     outings_ids: Set[int] = set()
     with engine.connect() as conn:
-        result = conn.execute(text(query), {"min_date": min_date.strftime("%Y-%m-%d")} if min_date else {})
+        result = conn.execute(text(query), {"min_date": min_date.date()} if min_date else {})
         outings_ids = {row.outing_id for row in result}
 
     return outings_ids
 
 def load_outings_for_refresh(engine: Engine, min_date: datetime.datetime) -> Dict[int, Tuple[str, Optional[str]]]:
-    """Return {outing_id: (date, conditions)} for outings whose date is >= min_date"""
+    """Return {outing_id: (date, conditions)} for outings whose date is >= min_date.
+    The date is returned as a 'YYYY-MM-DD' string, to be compared with the API's date_start."""
     query = "SELECT outing_id, date, conditions FROM Outings WHERE date >= :min_date"
 
     with engine.connect() as conn:
-        result = conn.execute(text(query), {"min_date": min_date.strftime("%Y-%m-%d")})
-        outings = {row.outing_id: (row.date, row.conditions) for row in result}
+        result = conn.execute(text(query), {"min_date": min_date.date()})
+        outings = {row.outing_id: (row.date.isoformat(), row.conditions) for row in result}
 
     return outings
 
@@ -231,12 +255,12 @@ def get_last_outing_date(engine: Engine) -> Optional[datetime.datetime]:
     query = "SELECT MAX(date) FROM Outings"
 
     with engine.connect() as conn:
-        result_str = conn.execute(text(query)).scalar_one()
+        last_date = conn.execute(text(query)).scalar_one()
 
-    if result_str is None:
+    if last_date is None:
         return None
 
-    return datetime.datetime.strptime(result_str, "%Y-%m-%d")
+    return datetime.datetime.combine(last_date, datetime.time())
 
 def check_route_existence(engine: Engine, route_id: int) -> bool:
     """Checks whether the route exists in db"""

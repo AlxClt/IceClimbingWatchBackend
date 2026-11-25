@@ -77,7 +77,7 @@ They are separate from `FRONTEND_REPO_TOKEN`, which only the weather workflow us
 Dockerfile: [c2c_scraper/Dockerfile](../c2c_scraper/Dockerfile). The build context is the `c2c_scraper/` folder only, so the weather pipeline, its database and the docs never end up in the image.
 
 1. Base image: `python:3.13.9`.
-2. `COPY requirements.txt` then `pip install`, kept as a separate layer for caching. [requirements.txt](../c2c_scraper/requirements.txt) holds only the scraper's dependencies (`requests`, `SQLAlchemy`, `psycopg`, `pyproj`, `tqdm` and their pinned transitive dependencies).
+2. `COPY requirements.txt` then `pip install`, kept as a separate layer for caching. [requirements.txt](../c2c_scraper/requirements.txt) holds only the scraper's dependencies (`requests`, `SQLAlchemy`, `alembic`, `psycopg`, `pyproj`, `tqdm` and their pinned transitive dependencies).
 3. `COPY . .`, filtered by [c2c_scraper/.dockerignore](../c2c_scraper/.dockerignore). The filter drops `.env*` files except `.env.example` (so secrets never end up in an image, including local builds), caches, virtualenvs, `*.db`, logs and the Docker and compose files.
 4. `ENTRYPOINT ["python", "main.py"]`. The container's command (`init` or `update`) becomes the mode argument.
 
@@ -97,13 +97,30 @@ docker run --rm --env-file .env.runtime <dockerhub-user>/iceclimbingwatch-c2c_sc
 
 Releasing therefore means running the workflow with `tag_latest` ticked, or deploying a specific `sha-<commit>` tag. Configuring the service and scheduling the periodic `update` runs are done on the server and are not stored in this repo. The very first run against an empty database must be `init`: `update` refuses to run when the `outings` table is empty.
 
+Every run (`init` or `update`) first applies the pending Alembic migrations that ship in the image ([c2c_scraper.md §6](c2c_scraper.md#6-data-written)). Deploying an image with a new migration therefore migrates the production database on its next run, before scraping. A failed migration is rolled back, and the run then stops with `app.crash`.
+
+### Database migrations
+
+Any change to [c2c/schema.py](../c2c_scraper/c2c/schema.py) needs a migration in [c2c/migrations/versions/](../c2c_scraper/c2c/migrations/versions/). To create one, run against a local database that is at the latest revision:
+
+```bash
+cd c2c_scraper
+export DATABASE_URL=postgresql+psycopg://...   # local database, not production
+alembic upgrade head
+alembic revision --autogenerate -m "describe the change"   # then review the generated file
+alembic upgrade head
+alembic check   # "No new upgrade operations detected": models and migrations agree
+```
+
+Autogenerate does not detect everything (data fixes, renames, `USING` casts), so review the generated file and add those by hand, as in `0002_unique_country_dates.py`. Name the file `<revision>_<slug>.py` (the `file_template` in [alembic.ini](../c2c_scraper/alembic.ini)).
+
 ### Local development
 
 [c2c_scraper/docker-compose.yml](../c2c_scraper/docker-compose.yml) builds the image from the local source:
 
 ```bash
 cd c2c_scraper
-docker compose run --rm c2c_scraper_init   # one-off: create schema + full route scrape
+docker compose run --rm c2c_scraper_init   # one-off: migrate (creates the schema) + full route scrape
 docker compose run --rm c2c_scraper        # incremental update
 ```
 

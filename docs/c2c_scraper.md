@@ -22,6 +22,8 @@ python main.py init     # create the schema, then do a full scrape of routes and
 python main.py update   # incremental scrape of recent outings
 ```
 
+In both modes, the scraper first applies any pending database migrations (Alembic, see [section 6](#6-data-written)), then starts scraping. On an empty database this creates the schema.
+
 The database is set by the `DATABASE_URL` environment variable, which should be set by hand in the case the scraper is run from command line without using the docker image. The docker image reads this environment variable from `.env.runtime`
 
 Environment variables read at runtime:
@@ -154,7 +156,80 @@ flowchart TD
 
 ## 6. Data written
 
-Tables (all created by `create_db`): `routes`, `outings`, `outings_mapping`, `orientations`, `orientation_mapping`, `countries`, `countries_mapping`. `create_db` only creates missing tables (`checkfirst=True`), so it never alters or drops existing ones.
+Tables: `routes`, `outings`, `outings_mapping`, `orientations`, `orientation_mapping`, `countries`, `countries_mapping`.
+
+The schema is managed by Alembic. Migrations live in [c2c_scraper/c2c/migrations/versions/](../c2c_scraper/c2c/migrations/versions/), and `migrate_db` ([c2c/db.py](../c2c_scraper/c2c/db.py)) applies the pending ones in a single transaction each time the scraper starts. Alembic records the applied revision in the `alembic_version` table. A database created before Alembic (it has the tables but no `alembic_version`) is first stamped at the baseline revision `0001`, then upgraded. `init` then only fills the `orientations` table. Any change to [schema.py](../c2c_scraper/c2c/schema.py) needs a new migration (see [c2c_scraper_pipeline.md](c2c_scraper_pipeline.md#3-running-and-deploying)).
+
+| Revision | Change |
+|---|---|
+| `0001` | Baseline: the original schema (dates stored as strings) |
+| `0002` | Merges countries that share a `countryName` (keeps the lowest `country_id` and moves its route links), makes `countryName` unique, converts `outings.date`, `outings.last_updated` and `routes.last_updated` to `DATE` |
+
+### Entity-relationship diagram
+
+Defined in [c2c_scraper/c2c/schema.py](../c2c_scraper/c2c/schema.py) (as of revision `0002`). The three `*_mapping` tables are many-to-many join tables whose primary key is the pair of foreign keys. Columns are nullable unless marked `NOT NULL`. Alembic's `alembic_version` table is not shown.
+
+```mermaid
+erDiagram
+    routes ||--o{ outings_mapping : "has"
+    outings ||--o{ outings_mapping : "reports on"
+    routes ||--o{ orientation_mapping : "faces"
+    orientations ||--o{ orientation_mapping : ""
+    routes ||--o{ countries_mapping : "located in"
+    countries ||--o{ countries_mapping : ""
+
+    routes {
+        int route_id PK
+        string name
+        float lat "NOT NULL"
+        float lon "NOT NULL"
+        int snow_ice_mixed "1 or NULL"
+        int mountain_climbing "1 or NULL"
+        int ice_climbing "1 or NULL"
+        int elevation_min
+        int elevation_max
+        int difficulties_height
+        int height_diff_difficulties
+        string glacier
+        string global_rating
+        string ice_rating
+        string mixed_rating
+        string rock_free_rating
+        date last_updated
+    }
+
+    outings {
+        int outing_id PK
+        date date "NOT NULL"
+        string conditions
+        date last_updated
+    }
+
+    outings_mapping {
+        int route_id PK, FK
+        int outing_id PK, FK
+    }
+
+    orientations {
+        int orientation_id PK
+        string orientation UK "NOT NULL"
+    }
+
+    orientation_mapping {
+        int route_id PK, FK
+        int orientation_id PK, FK
+    }
+
+    countries {
+        int country_id PK
+        string countryName UK
+    }
+
+    countries_mapping {
+        int route_id PK, FK
+        int country_id PK, FK
+    }
+```
 
 ### Route fields
 
@@ -167,9 +242,9 @@ Tables (all created by `create_db`): `routes`, `outings`, `outings_mapping`, `or
 | `elevation_min`, `elevation_max`, `difficulties_height`, `height_diff_difficulties` | same-named fields |
 | `glacier` | `glacier_gear` |
 | `global_rating`, `ice_rating`, `mixed_rating`, `rock_free_rating` | same-named fields |
-| `last_updated` | scrape date (`YYYY-MM-DD`, stored as a string) |
+| `last_updated` | scrape date (`DATE`) |
 | → `orientations` | `orientations` list, matched against the `orientations` table (created if unknown) |
-| → `countries` | `areas` with `area_type == "country"`, using the French locale title. Looked up by **name**, created if missing. |
+| → `countries` | `areas` with `area_type == "country"`, using the French locale title. Looked up by **name** (unique), created if missing. |
 | → `outings` | every outing of the route (see below) |
 
 ### Outing fields
@@ -177,9 +252,11 @@ Tables (all created by `create_db`): `routes`, `outings`, `outings_mapping`, `or
 | Column | Source |
 |---|---|
 | `outing_id` | `document_id` |
-| `date` | `date_start` (string `YYYY-MM-DD`) |
+| `date` | `date_start` (`DATE`) |
 | `conditions` | `condition_rating` (for example `excellent`, `good`, `average`, `poor`, or `NULL`) |
-| `last_updated` | scrape date |
+| `last_updated` | scrape date (`DATE`) |
+
+The scraper handles dates as `YYYY-MM-DD` strings. The `IsoDate` column type in [schema.py](../c2c_scraper/c2c/schema.py) converts them to `DATE` on write, and `load_outings_for_refresh` turns them back into strings so they can be compared with the API's `date_start`.
 
 The insert helpers use get-or-create for related objects, so an outing that is shared by two routes is stored once and mapped to both.
 
