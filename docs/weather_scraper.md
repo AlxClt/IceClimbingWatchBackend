@@ -160,4 +160,4 @@ pytest tests                       # feature tests (no network, no database)
 TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/test pytest tests
 ```
 
-The database tests need a disposable PostgreSQL database: they drop its `public` schema. For example, start one with `docker run -d -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=test -p 5433:5432 postgres:16`. On Windows, also install `psycopg-binary` (libpq).
+The database tests need a disposable PostgreSQL database: they drop its `public` schema. For example, start one with `docker run -d -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=test -p 5433:5432 postgres:16`.
