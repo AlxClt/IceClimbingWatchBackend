@@ -41,16 +41,18 @@ The workflow builds whatever branch or ref you pick in the dispatch form, so it 
 
 The job runs on `ubuntu-latest` with a matrix whose single entry is `c2c_scraper` (context `c2c_scraper`, file `c2c_scraper/Dockerfile`). `fail-fast: false` is set, so more images can be added as matrix entries later.
 
+Every action is pinned to a full commit SHA, with the release tag in a trailing comment (for example `actions/checkout@11d5960… # v4.4.0`). To upgrade an action, replace both the SHA and the comment. Dependabot or Renovate can do this automatically if they are enabled later.
+
 | Step | What it does |
 |---|---|
 | Decide whether this matrix entry should run | Computes `run=true/false` from the event and the `image` input. Every later step has `if: steps.select.outputs.run == 'true'`. |
-| Checkout | `actions/checkout@v4` |
-| Set up Docker Buildx | `docker/setup-buildx-action@v3` |
-| Login to Docker Hub | `docker/login-action@v3` using secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` |
+| Checkout | `actions/checkout` v4.4.0 |
+| Set up Docker Buildx | `docker/setup-buildx-action` v3.12.0 |
+| Login to Docker Hub | `docker/login-action` v3.7.0, using secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` |
 | Compute image name | `<DOCKERHUB_USERNAME>/iceclimbingwatch-c2c_scraper` (prefix from `env.IMAGE_NAMESPACE`; Docker Hub names must be lowercase) |
 | Determine whether to tag `:latest` | `true` on a push to `main` (currently unreachable) or when `tag_latest` is ticked |
-| Docker metadata | `docker/metadata-action@v5` produces tags and OCI labels |
-| Build and push | `docker/build-push-action@v6`, `push: true`, layer cache stored in the GitHub Actions cache (`type=gha`, `mode=max`, `scope=c2c_scraper`) |
+| Docker metadata | `docker/metadata-action` v5.10.0 produces tags and OCI labels |
+| Build and push | `docker/build-push-action` v6.19.2, `push: true`, layer cache stored in the GitHub Actions cache (`type=gha`, `mode=max`, `scope=c2c_scraper`) |
 
 ### Tags produced
 
@@ -114,13 +116,7 @@ Both services read `env_file: .env.runtime` (in `c2c_scraper/`), which is gitign
 
 ---
 
-## 4. Known gaps
-
-1. **No quality gate.** There is no test, lint or type-check job, and the repo has no test suite. The image is pushed as soon as it builds.
-2. **No automatic trigger.** With the `push` trigger commented out, the `github.event_name == "push"` branches in the workflow never run.
-3. **Unpinned action versions.** The workflow uses major-version tags such as `@v4` and `@v6` instead of commit SHAs.
-
-### Suggested next steps
+### TODO
 
 - Add a test and lint job that the build job depends on (`needs:`).
-- Re-enable `push` on `main` (optionally with `paths: [c2c_scraper/**]`), so `main` publishes `:latest` automatically.
+- One main development work has been done: Re-enable `push` on `main` (optionally with `paths: [c2c_scraper/**]`), so `main` publishes `:latest` automatically.

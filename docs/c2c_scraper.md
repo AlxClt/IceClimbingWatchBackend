@@ -1,8 +1,8 @@
-# Camptocamp scraper
+# Camptocamp.org scraper
 
-This scraper collects climbing **routes** and **outings** (trip reports with a condition rating) from the public camptocamp.org REST API (`https://api.camptocamp.org`) and stores them in a PostgreSQL database. That data is the training set for the IceClimbingWatch ice-conditions model. The database is separate from the weather pipeline's SQLite database (`weather/`).
+Collects climbing **routes** and **outings** from the public camptocamp.org REST API (`https://api.camptocamp.org`) and stores them in a PostgreSQL database. Most outings are associated with a conditions report (excellent, good, average, bad), so this will be used as training data for an ice conditions prediction model.
 
-All the code lives in [c2c_scraper/](../c2c_scraper/), which is also the Docker build context (see [c2c_scraper_pipeline.md](c2c_scraper_pipeline.md)).
+All the code is in [c2c_scraper/](../c2c_scraper/), which is also the Docker build context.
 
 - Scraper: [c2c_scraper/c2c/scraper.py](../c2c_scraper/c2c/scraper.py) (`C2CScraper`, `C2CApiCallIterator`)
 - Entrypoint: [c2c_scraper/main.py](../c2c_scraper/main.py)
@@ -17,12 +17,12 @@ All the code lives in [c2c_scraper/](../c2c_scraper/), which is also the Docker 
 
 ```bash
 cd c2c_scraper
-pip install -r requirements.txt    # Python 3.13 (the version of the Docker image)
-python main.py init     # create the schema, then do a full scrape of routes (and their outings)
+pip install -r requirements.txt    
+python main.py init     # create the schema, then do a full scrape of routes and their outings
 python main.py update   # incremental scrape of recent outings
 ```
 
-The database is set by the `DATABASE_URL` environment variable, which takes any SQLAlchemy URL. `requirements.txt` ships the `psycopg` (v3) driver, so use `postgresql+psycopg://user:pass@host/db`. If `DATABASE_URL` is unset, the run fails as soon as it tries to connect. The template is [c2c_scraper/.env.example](../c2c_scraper/.env.example).
+The database is set by the `DATABASE_URL` environment variable, which should be set by hand in the case the scraper is run from command line without using the docker image. The docker image reads this environment variable from `.env.runtime`
 
 Environment variables read at runtime:
 
@@ -34,14 +34,6 @@ Environment variables read at runtime:
 | `LOG_TO_FILE` | `0` | `1` also writes `app.log` and `error.log` (rotating, 10 MB × 5) |
 | `LOG_DIR` | `logs` | Folder for the log files |
 | `RUN_ID` | random UUID | Correlation id added to every log line |
-
-The entrypoint does three things:
-
-1. It configures logging and tags every line with `component=c2c` and `mode=<mode>`.
-2. In `init` mode only, it calls `create_db()`, which creates every table and fills `orientations` with the 8 compass points from `config.json`.
-3. It builds `C2CScraper(mode, dbstring=DATABASE_URL, config)`, calls `run()`, and logs a per-activity summary.
-
-Any uncaught exception is logged as `app.crash` and re-raised, so the process exits non-zero.
 
 ---
 
@@ -57,7 +49,7 @@ Any uncaught exception is logged as `app.crash` and re-raised, so the process ex
 | `c2c_scraper_parameters.activities_of_interest` | `snow_ice_mixed`, `mountain_climbing`, `ice_climbing` | Activities scraped, one after the other |
 | `activities_filter` / `routes_filter` / `outings_date_filter` | `act=` / `r=` / `date=` | Query-string prefixes |
 | `num_results_per_page` | `100` | Page size (the API maximum, enforced by an assert) |
-| `refresh_window_days` | `7` | `update` only. Known outings dated within this many days are checked for changes, and the update window overlaps the last known outing by this many days. |
+| `refresh_window_days` | `7` | `update` only. Known outings dated within this many days are checked for changes, and the update window overlaps the last known outing by this many days. This is useful as sometimes users creates draft of their outings, without the conditions rating and updates them later |
 
 ---
 
@@ -221,4 +213,4 @@ Log lines are structured (JSON by default) and go to stdout through a queue-base
 
 ## 8. Load on camptocamp.org
 
-There is no explicit rate limiting. In `init` mode, 8 worker processes each make at least 2 requests per route: one or more outing pages plus the full route document. The only throttle is the backoff that follows 429 or 5xx responses. `update` mode is sequential and much lighter. It makes one request per listing page plus one per **new** outing. Known outings, including those checked for a refresh, cost no extra request, and each missing route costs a few more requests.
+There is no explicit rate limiting. In `init` mode, 8 worker processes each make at least 2 requests per route: one or more outing pages plus the full route document. The only throttle is the backoff that follows 429 or 5xx responses. `update` mode is sequential and much lighter. It makes one request per listing page plus one per **new** outing. 
