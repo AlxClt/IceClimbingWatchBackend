@@ -1,4 +1,4 @@
-name: Build & Push c2c_scraper image to Docker Hub
+name: Build & Push scraper images to Docker Hub
 
 on:
   workflow_dispatch:
@@ -11,6 +11,7 @@ on:
         options:
           - all
           - c2c_scraper
+          - weather_scraper
       tag_latest:
         description: "Also push the :latest tag (manual runs only)"
         required: true
@@ -32,6 +33,9 @@ jobs:
           - name: c2c_scraper
             context: c2c_scraper
             dockerfile: c2c_scraper/Dockerfile
+          - name: weather_scraper
+            context: weather_scraper
+            dockerfile: weather_scraper/Dockerfile
 
     steps:
       - name: Decide whether this matrix entry should run

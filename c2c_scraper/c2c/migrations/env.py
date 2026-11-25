@@ -15,8 +15,17 @@ config = context.config
 target_metadata = Base.metadata
 
 
+def include_object(obj, name, type_, reflected, compare_to):
+    """Ignore the database tables that are not in the c2c metadata: the outing weather tables
+    (weather_scraper/, own Alembic history) live in the same database, and autogenerate would
+    otherwise propose to drop them."""
+    if type_ == "table" and reflected and compare_to is None:
+        return False
+    return True
+
+
 def run_migrations(connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(connection=connection, target_metadata=target_metadata, include_object=include_object)
     with context.begin_transaction():
         context.run_migrations()
 

@@ -1,0 +1,11 @@
+# Local development: builds the image from this folder.
+# Production runs the image published by .github/workflows/c2c_scraper_image.yml, after the c2c scraper.
+services:
+  weather_scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: weather_scraper_container
+    env_file:
+      - .env.runtime
+    command: ["update"]    # weather of the pending ice-climbing outings, within the daily budget

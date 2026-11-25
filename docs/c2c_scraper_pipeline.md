@@ -1,6 +1,6 @@
-# CI/CD pipeline: camptocamp scraper
+# CI/CD pipeline: camptocamp and outing weather scrapers
 
-This page covers how the camptocamp scraper ([c2c_scraper.md](c2c_scraper.md)) is built, published and run. The daily weather pipeline (`weather/`, [update_ice_weather_db.yml](../.github/workflows/update_ice_weather_db.yml)) is a separate workflow and is not covered here.
+This page covers how the camptocamp scraper ([c2c_scraper.md](c2c_scraper.md)) and the outing weather scraper ([weather_scraper.md](weather_scraper.md)) are built, published and run. Both images are built by the same workflow and follow the same pattern; the sections below describe the c2c scraper, and the weather scraper differs only where noted. The daily weather pipeline (`weather/`, [update_ice_weather_db.yml](../.github/workflows/update_ice_weather_db.yml)) is a separate workflow and is not covered here.
 
 **In short:** a **manually triggered** GitHub Actions workflow builds the scraper's Docker image from [c2c_scraper/](../c2c_scraper/) and pushes it to Docker Hub as `<DOCKERHUB_USERNAME>/iceclimbingwatch-c2c_scraper`. A service on the production server runs that published image against PostgreSQL. [c2c_scraper/docker-compose.yml](../c2c_scraper/docker-compose.yml) is for local development and builds from source. There are no automated tests or lint steps, and the workflow has no automatic trigger.
 
@@ -26,7 +26,7 @@ The workflow runs on `workflow_dispatch` only, which means a manual run from the
 
 | Input | Type | Default | Meaning |
 |---|---|---|---|
-| `image` | choice: `all`, `c2c_scraper` | `all` | Which matrix image to build. Matrix entries that are not selected skip every step and report success. |
+| `image` | choice: `all`, `c2c_scraper`, `weather_scraper` | `all` | Which matrix image to build. Matrix entries that are not selected skip every step and report success. |
 | `tag_latest` | boolean | `false` | Also push the `:latest` tag |
 
 Example:
@@ -39,7 +39,7 @@ The workflow builds whatever branch or ref you pick in the dispatch form, so it 
 
 ### Job: `build-and-push`
 
-The job runs on `ubuntu-latest` with a matrix whose single entry is `c2c_scraper` (context `c2c_scraper`, file `c2c_scraper/Dockerfile`). `fail-fast: false` is set, so more images can be added as matrix entries later.
+The job runs on `ubuntu-latest` with a matrix of two entries: `c2c_scraper` (context `c2c_scraper`, file `c2c_scraper/Dockerfile`) and `weather_scraper` (context `weather_scraper`, file `weather_scraper/Dockerfile`), published as `<DOCKERHUB_USERNAME>/iceclimbingwatch-c2c_scraper` and `<DOCKERHUB_USERNAME>/iceclimbingwatch-weather_scraper`. `fail-fast: false` is set, so one image failing does not cancel the other.
 
 Every action is pinned to a full commit SHA, with the release tag in a trailing comment (for example `actions/checkout@11d5960… # v4.4.0`). To upgrade an action, replace both the SHA and the comment. Dependabot or Renovate can do this automatically if they are enabled later.
 
@@ -95,6 +95,14 @@ A service on the server runs the image **published by CI**:
 docker run --rm --env-file .env.runtime <dockerhub-user>/iceclimbingwatch-c2c_scraper:latest update
 ```
 
+The outing weather scraper runs right after it, on the same database (its `.env.runtime` needs the same `DATABASE_URL`, see [weather_scraper/.env.example](../weather_scraper/.env.example)):
+
+```bash
+docker run --rm --env-file .env.runtime <dockerhub-user>/iceclimbingwatch-c2c_scraper:latest update \n  && docker run --rm --env-file .env.runtime <dockerhub-user>/iceclimbingwatch-weather_scraper:latest update
+```
+
+The first weather runs backfill the existing ice-climbing outings within the daily Open-Meteo budget (about 8 daily runs, [weather_scraper.md §5](weather_scraper.md#5-open-meteo-rate-limits)); running it once a day after `c2c update` is enough.
+
 Releasing therefore means running the workflow with `tag_latest` ticked, or deploying a specific `sha-<commit>` tag. Configuring the service and scheduling the periodic `update` runs are done on the server and are not stored in this repo. The very first run against an empty database must be `init`: `update` refuses to run when the `outings` table is empty.
 
 Every run (`init` or `update`) first applies the pending Alembic migrations that ship in the image ([c2c_scraper.md §6](c2c_scraper.md#6-data-written)). Deploying an image with a new migration therefore migrates the production database on its next run, before scraping. A failed migration is rolled back, and the run then stops with `app.crash`.
@@ -113,6 +121,8 @@ alembic check   # "No new upgrade operations detected": models and migrations ag
 ```
 
 Autogenerate does not detect everything (data fixes, renames, `USING` casts), so review the generated file and add those by hand, as in `0002_unique_country_dates.py`. Name the file `<revision>_<slug>.py` (the `file_template` in [alembic.ini](../c2c_scraper/alembic.ini)).
+
+The outing weather tables live in the same database but have their own Alembic history in `weather_scraper/` (revision table `alembic_version_weather`). The same commands work from `weather_scraper/`. Each environment ignores the other's tables (`include_object` in both `env.py`), so autogenerate never proposes to drop them.
 
 ### Local development
 
